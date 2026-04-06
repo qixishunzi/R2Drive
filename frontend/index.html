@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>R2Drive</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/layui@2.9.20/dist/css/layui.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <section id="login-screen" class="login-screen">
+      <div class="login-shell">
+        <div class="login-brand">
+          <div class="brand-mark">R2</div>
+          <div>
+            <p class="brand-eyebrow">R2Drive</p>
+            <h1>登录私人网盘</h1>
+            <p class="brand-copy">登录后直接进入文件列表模式，上传、新建文件夹和目录切换都在同一页完成。</p>
+          </div>
+        </div>
+        <form id="login-form" class="layui-form login-card" autocomplete="on">
+          <div class="field-block">
+            <label>账号</label>
+            <input id="login-username" type="text" required placeholder="ADMIN_USERNAME" class="layui-input" />
+          </div>
+          <div class="field-block">
+            <label>密码</label>
+            <input id="login-password" type="password" required placeholder="ADMIN_PASSWORD" class="layui-input" />
+          </div>
+          <button type="submit" class="layui-btn layui-btn-fluid layui-btn-normal">登录</button>
+          <p id="login-status" class="login-status"></p>
+        </form>
+      </div>
+    </section>
+
+    <main id="app-shell" class="app-shell hidden">
+      <header class="page-header">
+        <div>
+          <h2>R2Drive</h2>
+          <p class="page-subtitle">当前目录支持直接拖入文件或文件夹并自动上传。</p>
+        </div>
+        <div class="page-actions">
+          <span id="session-user" class="user-chip">未登录</span>
+          <button id="logout-button" class="layui-btn layui-btn-primary">退出</button>
+        </div>
+      </header>
+
+      <section id="dropzone" class="drive-card">
+        <div class="toolbar-row">
+          <div class="toolbar-left">
+            <button id="back-button" class="layui-btn layui-btn-primary">上一层</button>
+            <button id="new-folder-button" class="layui-btn layui-btn-primary">新建文件夹</button>
+            <button id="upload-trigger" class="layui-btn layui-btn-normal">上传文件</button>
+            <button id="refresh-button" class="layui-btn layui-btn-primary">刷新</button>
+            <input id="upload-file" type="file" multiple hidden />
+          </div>
+          <div class="toolbar-right">
+            <span id="folder-stats" class="folder-stats"></span>
+          </div>
+        </div>
+
+        <div class="path-row">
+          <div id="breadcrumbs" class="breadcrumbs"></div>
+        </div>
+
+        <div id="status-bar" class="status-bar hidden"></div>
+
+        <div class="list-head row-grid">
+          <span>名称</span>
+          <span>大小</span>
+          <span>修改时间</span>
+          <span class="actions-head">操作</span>
+        </div>
+
+        <div id="entry-list" class="entry-list empty-state">当前目录为空。你可以新建文件夹，或者把文件直接拖进来。</div>
+      </section>
+    </main>
+
+    <template id="entry-item-template">
+      <article class="entry-row row-grid">
+        <button class="entry-main" type="button">
+          <span class="entry-icon"></span>
+          <span class="entry-name"></span>
+        </button>
+        <span class="entry-size"></span>
+        <span class="entry-time"></span>
+        <div class="entry-actions"></div>
+      </article>
+    </template>
+
+    <script src="https://cdn.jsdelivr.net/npm/layui@2.9.20/dist/layui.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

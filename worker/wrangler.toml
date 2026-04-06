@@ -1,0 +1,15 @@
+name = "r2drive"
+main = "src/index.js"
+compatibility_date = "2026-04-06"
+
+[assets]
+directory = "../frontend"
+binding = "ASSETS"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "r2drive"
+
+[vars]
+ALLOWED_ORIGIN = "*"
+MAX_UPLOAD_SIZE = "104857600"
