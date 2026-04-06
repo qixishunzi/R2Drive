@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>R2Drive Links</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/layui@2.9.20/dist/css/layui.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="page-header">
+        <div>
+          <h2>直链管理</h2>
+          <p class="page-subtitle">查看文件对应的直链、剩余时长，并修改或删除它们。</p>
+        </div>
+        <div class="page-actions">
+          <a href="/" class="layui-btn layui-btn-primary">返回网盘</a>
+          <button id="refresh-links" class="layui-btn layui-btn-primary">刷新</button>
+        </div>
+      </header>
+
+      <section class="drive-card">
+        <div id="links-status" class="status-bar hidden"></div>
+        <div class="list-head link-grid">
+          <span>文件</span>
+          <span>链接</span>
+          <span>剩余时长</span>
+          <span class="actions-head">操作</span>
+        </div>
+        <div id="links-list" class="entry-list empty-state">正在加载直链...</div>
+      </section>
+    </main>
+
+    <template id="link-item-template">
+      <article class="entry-row link-grid">
+        <div class="link-file"></div>
+        <div class="link-url"></div>
+        <div class="link-remaining"></div>
+        <div class="entry-actions"></div>
+      </article>
+    </template>
+
+    <script src="https://cdn.jsdelivr.net/npm/layui@2.9.20/dist/layui.js"></script>
+    <script src="./links.js"></script>
+  </body>
+</html>

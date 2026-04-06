@@ -11,11 +11,12 @@ const text = (body, init = {}) => {
 };
 
 const FOLDER_MARKER = ".r2drive-folder";
+const SHARE_PREFIX = ".r2drive-shares";
 
 function withCors(response, origin) {
   const headers = new Headers(response.headers);
   headers.set("access-control-allow-origin", origin);
-  headers.set("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
+  headers.set("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS");
   headers.set("access-control-allow-headers", "authorization,content-type");
   headers.set("access-control-allow-credentials", "true");
   headers.set("access-control-max-age", "86400");
@@ -55,6 +56,16 @@ function badRequest(message) {
 
 function normalizeKey(input) {
   return input.replace(/^\/+|\/+$/g, "").replace(/\\/g, "/");
+}
+
+function validateUserKey(key) {
+  if (!key) {
+    throw new Error("Missing key");
+  }
+
+  if (key === SHARE_PREFIX || key.startsWith(`${SHARE_PREFIX}/`)) {
+    throw new Error("Reserved key prefix");
+  }
 }
 
 function parseBearerToken(request) {
@@ -178,12 +189,92 @@ function buildFileUrl(request, key) {
   return url.toString();
 }
 
+function buildShareUrl(request, id) {
+  const url = new URL(request.url);
+  url.pathname = `/s/${encodeURIComponent(id)}`;
+  url.search = "";
+  return url.toString();
+}
+
+function shareObjectKey(id) {
+  return `${SHARE_PREFIX}/${id}.json`;
+}
+
+function computeExpiresAt(ttlSeconds) {
+  if (ttlSeconds == null) {
+    return null;
+  }
+
+  const normalizedTtl = Math.max(60, Math.min(Number(ttlSeconds || 3600), 604800));
+  return Math.floor(Date.now() / 1000) + normalizedTtl;
+}
+
+function normalizeShare(record) {
+  return {
+    id: record.id,
+    key: record.key,
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt ?? null,
+    updatedAt: record.updatedAt ?? record.createdAt,
+    permanent: record.expiresAt == null
+  };
+}
+
+async function readShare(env, id) {
+  const object = await env.BUCKET.get(shareObjectKey(id));
+  if (!object) {
+    return null;
+  }
+
+  const payload = await object.json();
+  return normalizeShare(payload);
+}
+
+async function writeShare(env, share) {
+  const normalized = normalizeShare(share);
+  await env.BUCKET.put(shareObjectKey(normalized.id), JSON.stringify(normalized), {
+    httpMetadata: {
+      contentType: "application/json",
+      cacheControl: "private, max-age=0, no-store"
+    }
+  });
+  return normalized;
+}
+
+async function deleteShare(env, id) {
+  await env.BUCKET.delete(shareObjectKey(id));
+}
+
+async function listShares(env) {
+  let cursor = undefined;
+  const shares = [];
+
+  do {
+    const listed = await env.BUCKET.list({ prefix: `${SHARE_PREFIX}/`, cursor, limit: 1000 });
+    for (const object of listed.objects) {
+      const payload = await env.BUCKET.get(object.key);
+      if (!payload) {
+        continue;
+      }
+      shares.push(normalizeShare(await payload.json()));
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+
+  shares.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+  return shares;
+}
+
 async function listFiles(env, prefix) {
   const listed = await env.BUCKET.list({ prefix, limit: 1000 });
   const folders = [];
   const files = [];
 
   for (const object of listed.objects) {
+    if (object.key.startsWith(`${SHARE_PREFIX}/`)) {
+      continue;
+    }
+
     if (object.key.endsWith(`/${FOLDER_MARKER}`)) {
       folders.push({
         key: object.key.slice(0, -(`/${FOLDER_MARKER}`.length)),
@@ -209,6 +300,8 @@ async function createFolder(env, folderPath) {
     throw new Error("Missing folder path");
   }
 
+  validateUserKey(normalized);
+
   await env.BUCKET.put(`${normalized}/${FOLDER_MARKER}`, "", {
     httpMetadata: {
       contentType: "text/plain",
@@ -227,6 +320,8 @@ async function deleteFolder(env, folderPath) {
   if (!normalized) {
     throw new Error("Missing folder path");
   }
+
+  validateUserKey(normalized);
 
   let cursor = undefined;
   do {
@@ -304,6 +399,8 @@ async function handleUpload(request, env) {
     return badRequest("Missing key query parameter");
   }
 
+  validateUserKey(key);
+
   const contentLength = Number(request.headers.get("content-length") || "0");
   const maxUploadSize = Number(env.MAX_UPLOAD_SIZE || "0");
   if (maxUploadSize > 0 && contentLength > maxUploadSize) {
@@ -348,6 +445,8 @@ async function handleDelete(request, env, key) {
     return unauthorized();
   }
 
+  validateUserKey(key);
+
   await env.BUCKET.delete(key);
   return json({ ok: true, key });
 }
@@ -372,12 +471,50 @@ async function handleSignedLink(request, env) {
   }
 
   const key = normalizeKey(body.key || "");
-  const ttlSeconds = Math.max(60, Math.min(Number(body.ttlSeconds || 3600), 604800));
   if (!key) {
     return badRequest("Missing key");
   }
 
-  const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
+  validateUserKey(key);
+
+  const permanent = Boolean(body.permanent);
+  const expiresAt = permanent ? null : computeExpiresAt(body.ttlSeconds);
+  const share = await writeShare(env, {
+    id: crypto.randomUUID(),
+    key,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    expiresAt
+  });
+
+  return json({
+    id: share.id,
+    key: share.key,
+    ttlSeconds: share.expiresAt == null ? null : Math.max(0, share.expiresAt - Math.floor(Date.now() / 1000)),
+    expiresAt: share.expiresAt,
+    permanent: share.permanent,
+    url: buildShareUrl(request, share.id)
+  });
+}
+
+async function handlePreviewLink(request, env) {
+  if (!await requireAdmin(request, env)) {
+    return unauthorized();
+  }
+
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body !== "object") {
+    return badRequest("Invalid JSON body");
+  }
+
+  const key = normalizeKey(body.key || "");
+  if (!key) {
+    return badRequest("Missing key");
+  }
+
+  validateUserKey(key);
+
+  const expiresAt = computeExpiresAt(body.ttlSeconds || 1800);
   const signature = await signDownload(key, expiresAt, env);
   const url = new URL(buildFileUrl(request, key));
   url.searchParams.set("expires", String(expiresAt));
@@ -385,10 +522,84 @@ async function handleSignedLink(request, env) {
 
   return json({
     key,
-    ttlSeconds,
+    ttlSeconds: Math.max(0, expiresAt - Math.floor(Date.now() / 1000)),
     expiresAt,
     url: url.toString()
   });
+}
+
+async function handleListLinks(request, env) {
+  if (!await requireAdmin(request, env)) {
+    return unauthorized();
+  }
+
+  const shares = await listShares(env);
+  return json({ links: shares.map((share) => ({
+    ...share,
+    remainingSeconds: share.expiresAt == null ? null : Math.max(0, share.expiresAt - Math.floor(Date.now() / 1000)),
+    url: buildShareUrl(request, share.id)
+  })) });
+}
+
+async function handleUpdateLink(request, env, id) {
+  if (!await requireAdmin(request, env)) {
+    return unauthorized();
+  }
+
+  const current = await readShare(env, id);
+  if (!current) {
+    return text("Not Found", { status: 404 });
+  }
+
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body !== "object") {
+    return badRequest("Invalid JSON body");
+  }
+
+  const updated = await writeShare(env, {
+    ...current,
+    updatedAt: new Date().toISOString(),
+    expiresAt: body.permanent ? null : computeExpiresAt(body.ttlSeconds)
+  });
+
+  return json({
+    link: {
+      ...updated,
+      remainingSeconds: updated.expiresAt == null ? null : Math.max(0, updated.expiresAt - Math.floor(Date.now() / 1000)),
+      url: buildShareUrl(request, updated.id)
+    }
+  });
+}
+
+async function handleDeleteLink(request, env, id) {
+  if (!await requireAdmin(request, env)) {
+    return unauthorized();
+  }
+
+  await deleteShare(env, id);
+  return json({ ok: true, id });
+}
+
+async function handleSharedDownload(request, env, id) {
+  const share = await readShare(env, id);
+  if (!share) {
+    return text("Not Found", { status: 404 });
+  }
+
+  if (share.expiresAt != null && Math.floor(Date.now() / 1000) > share.expiresAt) {
+    return unauthorized("Shared link expired");
+  }
+
+  const object = await env.BUCKET.get(share.key);
+  if (!object) {
+    return text("Not Found", { status: 404 });
+  }
+
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  headers.set("content-disposition", `inline; filename*=UTF-8''${encodeURIComponent(share.key.split("/").pop() || share.key)}`);
+  return new Response(object.body, { headers });
 }
 
 async function handleDownload(request, env, key) {
@@ -440,11 +651,15 @@ function isApiRequest(pathname) {
     || pathname === "/api/logout"
     || pathname === "/api/session"
     || pathname === "/api/files"
+    || pathname === "/api/links"
     || pathname === "/api/folders"
     || pathname === "/api/upload"
     || pathname === "/api/direct-link"
+    || pathname === "/api/preview-link"
     || pathname.startsWith("/api/files/")
+    || pathname.startsWith("/api/links/")
     || pathname.startsWith("/api/folders/")
+    || pathname.startsWith("/s/")
     || pathname.startsWith("/d/");
 }
 
@@ -496,6 +711,10 @@ export default {
         return withCors(await handleList(request, env), origin);
       }
 
+      if (request.method === "GET" && pathname === "/api/links") {
+        return withCors(await handleListLinks(request, env), origin);
+      }
+
       if (request.method === "POST" && pathname === "/api/folders") {
         return withCors(await handleCreateFolder(request, env), origin);
       }
@@ -513,6 +732,20 @@ export default {
         return withCors(await handleSignedLink(request, env), origin);
       }
 
+      if (request.method === "POST" && pathname === "/api/preview-link") {
+        return withCors(await handlePreviewLink(request, env), origin);
+      }
+
+      if ((request.method === "PATCH" || request.method === "POST") && pathname.startsWith("/api/links/")) {
+        const id = normalizeKey(decodeURIComponent(pathname.slice("/api/links/".length)));
+        return withCors(await handleUpdateLink(request, env, id), origin);
+      }
+
+      if (request.method === "DELETE" && pathname.startsWith("/api/links/")) {
+        const id = normalizeKey(decodeURIComponent(pathname.slice("/api/links/".length)));
+        return withCors(await handleDeleteLink(request, env, id), origin);
+      }
+
       if (request.method === "DELETE" && pathname.startsWith("/api/files/")) {
         const key = normalizeKey(decodeURIComponent(pathname.slice("/api/files/".length)));
         return withCors(await handleDelete(request, env, key), origin);
@@ -521,6 +754,11 @@ export default {
       if (request.method === "GET" && pathname.startsWith("/d/")) {
         const key = normalizeKey(decodeURIComponent(pathname.slice(3)));
         return withCors(await handleDownload(request, env, key), origin);
+      }
+
+      if (request.method === "GET" && pathname.startsWith("/s/")) {
+        const id = normalizeKey(decodeURIComponent(pathname.slice(3)));
+        return withCors(await handleSharedDownload(request, env, id), origin);
       }
 
       return withCors(text("Not Found", { status: 404 }), origin);

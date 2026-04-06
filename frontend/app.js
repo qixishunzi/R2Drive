@@ -214,6 +214,14 @@
     return apiFetch("/api/direct-link", {
       method: "POST",
       headers: { "content-type": "application/json" },
+      body: JSON.stringify({ key, ttlSeconds, permanent: ttlSeconds == null })
+    });
+  }
+
+  async function createPreviewLink(key, ttlSeconds) {
+    return apiFetch("/api/preview-link", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ key, ttlSeconds })
     });
   }
@@ -240,7 +248,7 @@
   async function previewFile(file) {
     try {
       setStatus(`正在生成预览链接: ${file.key}`, false);
-      const result = await createDirectLink(file.key, 1800);
+      const result = await createPreviewLink(file.key, 1800);
       const extension = getExtension(file.key);
       let node;
 
@@ -290,6 +298,39 @@
     button.textContent = label;
     button.addEventListener("click", handler);
     return button;
+  }
+
+  function askLinkDuration() {
+    return new Promise((resolve) => {
+      const content = `
+        <div style="padding:16px 6px 0;">
+          <select id="link-ttl-select" class="layui-input">
+            <option value="3600">1 小时</option>
+            <option value="86400">1 天</option>
+            <option value="604800">7 天</option>
+            <option value="permanent">永久有效</option>
+          </select>
+        </div>
+      `;
+      const index = layer.open({
+        type: 1,
+        title: "设置直链有效期",
+        area: ["320px", "220px"],
+        content,
+        btn: ["生成直链", "取消"],
+        yes() {
+          const value = document.querySelector("#link-ttl-select")?.value;
+          layer.close(index);
+          resolve(value === "permanent" ? null : Number(value));
+        },
+        btn2() {
+          resolve(undefined);
+        },
+        cancel() {
+          resolve(undefined);
+        }
+      });
+    });
   }
 
   function renderEntries() {
@@ -344,7 +385,12 @@
         actions.appendChild(actionButton("预览", "layui-btn layui-btn-sm layui-btn-primary", () => previewFile(entry)));
         actions.appendChild(actionButton("复制直链", "layui-btn layui-btn-sm layui-btn-normal", async () => {
           try {
-            const result = await createDirectLink(entry.key, 3600);
+            const ttlSeconds = await askLinkDuration();
+            if (ttlSeconds === undefined) {
+              return;
+            }
+
+            const result = await createDirectLink(entry.key, ttlSeconds);
             await navigator.clipboard.writeText(result.url);
             layer.msg("直链已复制", { icon: 1 });
           } catch (error) {

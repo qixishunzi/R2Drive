@@ -216,6 +216,13 @@ h1 {
   grid-template-columns: minmax(0, 1.8fr) 120px 180px auto;
 }
 
+.link-grid {
+  display: grid;
+  gap: 16px;
+  align-items: center;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.8fr) 180px auto;
+}
+
 .list-head {
   padding: 0 14px 10px;
   font-size: 13px;
@@ -281,6 +288,17 @@ h1 {
   justify-content: flex-end;
 }
 
+.link-file,
+.link-url {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.link-url {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .empty-state {
   padding: 28px;
   border: 1px dashed var(--border);
@@ -321,7 +339,8 @@ h1 {
   .login-shell,
   .page-header,
   .toolbar-row,
-  .row-grid {
+  .row-grid,
+  .link-grid {
     grid-template-columns: 1fr;
   }
 
