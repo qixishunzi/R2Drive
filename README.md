@@ -1,23 +1,47 @@
 # R2Drive
 
-`R2Drive` 是一个基于 Cloudflare R2 和 Workers 的私人网盘项目，当前版本已经收敛为单项目、单域名部署，并使用账号密码登录进入后台。
+`R2Drive` 是一个基于 Cloudflare R2 和 Workers 的私人网盘项目。
 
-支持能力：
+当前版本特性：
 
-- 上传文件到 R2
-- 拖拽上传和批量上传
-- 目录浏览、删除和基础预览
+- 单 Worker、单域名部署
+- 账号密码登录，使用 `HttpOnly Cookie` 维持会话
+- 文件夹和文件混合列表展示
+- 点击文件夹进入目录，支持返回上一层
+- 上传文件到当前目录
+- 新建文件夹、删除文件、删除文件夹
+- 拖拽文件到页面后直接上传到当前目录
+- 拖拽文件夹到页面后自动创建同名目录并递归上传
 - 生成带有效期的签名直链
-- 同一个 Worker 同时提供前端页面和 API
-- 账号密码登录，浏览器使用 HttpOnly Cookie 保存会话
+- 基础文件预览
 
 ## 项目结构
 
 ```text
 frontend/        由 Worker 直接托管的静态前端
-worker/          Worker API、下载签名和静态资源入口
+worker/          Worker API、R2 逻辑和静态资源入口
 package.json     本地开发与部署脚本
 ```
+
+## 当前界面逻辑
+
+项目当前采用接近网盘产品的列表模式：
+
+- 文件夹和文件显示在同一个列表中
+- 点击文件夹进入该目录
+- 使用 `上一层` 返回父目录
+- `上传文件` 会把所选文件直接上传到当前目录
+- `新建文件夹` 可以在当前目录下创建空文件夹
+- 将文件拖进页面，会直接上传到当前目录
+- 将文件夹拖进页面，会自动在当前目录创建同名文件夹并递归上传内容
+
+为了支持空文件夹，Worker 会在 R2 中写入一个隐藏标记对象：
+
+```text
+<folder-path>/.r2drive-folder
+```
+
+这个对象仅用于目录存在性标记，前端不会把它展示成普通文件。
 
 ## 路由设计
 
@@ -27,11 +51,32 @@ package.json     本地开发与部署脚本
 - `/styles.css` 前端样式
 - `/app.js` 前端脚本
 - `/api/health` 健康检查
-- `/api/files` 文件列表
+- `/api/login` 登录
+- `/api/logout` 退出登录
+- `/api/session` 当前会话
+- `/api/files` 获取文件和文件夹列表
+- `/api/folders` 创建文件夹
 - `/api/upload?key=...` 上传文件
 - `/api/direct-link` 生成签名直链
 - `/api/files/:key` 删除文件
-- `/d/:key?expires=...&sig=...` 受控下载
+- `/api/folders/:key` 删除文件夹及其全部内容
+- `/d/:key?expires=...&sig=...` 签名下载链接
+
+## 直链有效期
+
+直链并不是永久链接，而是带过期时间的签名下载地址。
+
+后端允许的有效期范围：
+
+- 最短：`60` 秒
+- 最长：`604800` 秒，也就是 `7 天`
+
+当前前端默认值：
+
+- 文件预览使用 `1800` 秒，也就是 `30 分钟`
+- 点击 `复制直链` 使用 `3600` 秒，也就是 `1 小时`
+
+如果你要改默认有效期，可以调整 `frontend/app.js` 中调用 `/api/direct-link` 时传入的 `ttlSeconds`。
 
 ## 本地开发
 
@@ -41,16 +86,16 @@ package.json     本地开发与部署脚本
 npm install
 ```
 
-启动 Worker：
+启动本地 Worker：
 
 ```bash
 npm run dev
 ```
 
-访问本地地址后：
+启动后：
 
-- 页面直接由 Worker 返回
-- 页面里的 API 地址可以留空，默认使用当前域名
+- 页面由 Worker 直接返回
+- 前端与 API 使用同一个本地地址
 
 ## Cloudflare 配置
 
@@ -66,11 +111,11 @@ binding = "BUCKET"
 bucket_name = "your-bucket-name"
 ```
 
-### 2. Worker 变量与机密
+### 2. 配置 Worker 变量与机密
 
 普通变量：
 
-- `ALLOWED_ORIGIN=https://drive.example.com`
+- `ALLOWED_ORIGIN=https://your-domain.example`
 - `MAX_UPLOAD_SIZE=104857600`
 
 机密：
@@ -82,7 +127,8 @@ bucket_name = "your-bucket-name"
 说明：
 
 - `ALLOWED_ORIGIN` 填你最终访问前端的域名
-- 现在已经是单域名部署，所以通常就是同一个 Worker 自定义域
+- `MAX_UPLOAD_SIZE` 单位是字节，默认示例值约等于 `100MB`
+- `SIGNING_KEY` 用于生成登录会话签名和下载签名
 
 ### 3. 绑定 R2 Bucket
 
@@ -97,7 +143,29 @@ bucket_name = "your-bucket-name"
 npm run deploy
 ```
 
-部署后，把你的自定义域名直接绑定到这个 Worker 即可。
+如果是 Cloudflare 导入 GitHub 项目，部署命令建议使用：
+
+```bash
+npx wrangler deploy --config worker/wrangler.toml
+```
+
+### 5. 绑定自定义域名
+
+部署后，把你的自定义域名直接绑定到这个 Worker。
+
+例如：
+
+```text
+https://drive.555681.xyz
+```
+
+同时把：
+
+```text
+ALLOWED_ORIGIN=https://drive.555681.xyz
+```
+
+配置到 Worker 变量中。
 
 ## 生产环境推荐配置
 
@@ -107,33 +175,65 @@ npm run deploy
 https://drive.555681.xyz
 ```
 
-那么 Worker 推荐配置为：
+那么推荐配置：
 
-- 自定义域：`drive.555681.xyz`
+- Worker 自定义域：`drive.555681.xyz`
 - `ALLOWED_ORIGIN=https://drive.555681.xyz`
-
-前端页面里：
-
-- 不再需要填写 API 地址
-- 直接使用 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 登录
+- 使用 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 登录
 
 ## API 概览
 
 ### `GET /api/health`
 
-检查 Worker 状态。
+检查 Worker 状态和登录状态。
+
+### `POST /api/login`
+
+账号密码登录，请求体示例：
+
+```json
+{
+  "username": "admin",
+  "password": "your-password"
+}
+```
+
+### `GET /api/session`
+
+获取当前会话信息。
+
+### `POST /api/logout`
+
+退出登录并清除会话 Cookie。
 
 ### `GET /api/files`
 
-列出文件，需要管理员令牌。
+返回当前对象列表，包含：
+
+- `files`
+- `folders`
+
+### `POST /api/folders`
+
+创建空文件夹，请求体示例：
+
+```json
+{
+  "path": "docs/manuals"
+}
+```
+
+### `DELETE /api/folders/:key`
+
+递归删除文件夹及其全部内容。
 
 ### `POST /api/upload?key=path/to/file.ext`
 
-上传文件内容到指定 key，需要管理员令牌。
+上传文件到指定 key。
 
 ### `DELETE /api/files/:key`
 
-删除文件，需要管理员令牌。
+删除单个文件。
 
 ### `POST /api/direct-link`
 
@@ -146,9 +246,15 @@ https://drive.555681.xyz
 }
 ```
 
+返回结果包含：
+
+- `url`
+- `expiresAt`
+- `ttlSeconds`
+
 ## 当前部署结论
 
-这个版本不再要求单独创建 Pages 项目。
+当前版本不需要单独创建 Pages 项目。
 
 你只需要：
 
@@ -156,4 +262,4 @@ https://drive.555681.xyz
 2. 一个绑定到 Worker 的自定义域名
 3. 一个 R2 Bucket
 
-适合你当前想要的单项目、单域名部署方式。
+这就是当前 `R2Drive` 的推荐部署方式。
